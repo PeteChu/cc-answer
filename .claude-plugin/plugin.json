@@ -9,5 +9,6 @@
       "description": "Model alias or id used to extract questions from the last reply",
       "default": "haiku"
     }
-  }
+  },
+  "types": "./types/index.d.ts"
 }

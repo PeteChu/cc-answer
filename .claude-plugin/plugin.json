@@ -1,8 +1,7 @@
 {
   "name": "answer",
-  "version": "0.1.0",
-  "description": "/answer: extract the questions from Claude's last reply and answer them in a pane",
-  "types": "./types/index.d.ts",
+  "version": "0.3.0",
+  "description": "/answer: answer the questions in Claude's last reply in Claude Code's native question dialog",
   "userConfig": {
     "model": {
       "type": "string",

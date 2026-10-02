@@ -42,6 +42,6 @@ claude plugin test .       # runs tests/*.test.ts
 
 Layout:
 
-- `hooks/register.ts`: the `/answer` command and the `tool.call` hook that fills the native dialog
-- `hooks/lib.ts`: the extraction prompt, fitting questions to the dialog's limits (header ≤ 12 chars, 2–4 options, ≤ 4 questions per round), and compiling the answers
-- `tests/answer.test.ts`: tests, with the dialog faked beneath the plugin: rounds of four, the submitted prompt, Esc and "Chat about this"
+- `hooks/register.ts`: the `/answer` command (extraction, one retry, the `--debug` report) and the `tool.call` hook that fills the native dialog
+- `hooks/lib.ts`: the extraction prompt, JSON repair and recovery from replies cut off partway, fitting questions to the dialog's limits (header ≤ 12 chars, 2–4 options, ≤ 4 questions per round), and compiling the answers
+- `tests/answer.test.ts`: tests, with the model and the dialog faked beneath the plugin: JSON repairs, rounds of four, the submitted prompt, Esc and "Chat about this", the retry, and the `--debug` report

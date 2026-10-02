@@ -8,7 +8,17 @@ A Claude Code mod to answer every question in Claude Code's native question dial
 
 ## Get started
 
-Load the repository as a plugin in a Claude Code runtime that supports mods:
+Install from the marketplace, inside Claude Code:
+
+```
+/plugin marketplace add PeteChu/cc-answer
+/plugin install answer@cc-answer
+/reload-plugins
+```
+
+A mod runs inside Claude Code with the same access Claude Code has. Read the code before installing.
+
+Or load a local clone directly:
 
 ```bash
 git clone https://github.com/PeteChu/cc-answer
@@ -59,3 +69,7 @@ Layout:
 - `hooks/register.ts`: the `/answer` command (extraction, one retry, the `--debug` report) and the `tool.call` hook that fills the native dialog
 - `hooks/lib.ts`: the extraction prompt, JSON repair and recovery from replies cut off partway, fitting questions to the dialog's limits (header ≤ 12 chars, 2–4 options, ≤ 4 questions per round), and compiling the answers
 - `tests/answer.test.ts`: tests, with the model and the dialog faked beneath the plugin: JSON repairs, rounds of four, the submitted prompt, Esc and "Chat about this", the retry, and the `--debug` report
+
+## License
+
+MIT. See [LICENSE](LICENSE).

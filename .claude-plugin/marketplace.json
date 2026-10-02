@@ -1,0 +1,13 @@
+{
+  "name": "cc-answer",
+  "owner": {
+    "name": "Phuengton Chummuel"
+  },
+  "description": "/answer: answer Claude's prose questions in the native question dialog",
+  "plugins": [
+    {
+      "name": "answer",
+      "source": "./"
+    }
+  ]
+}

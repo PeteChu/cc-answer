@@ -2,6 +2,11 @@
   "name": "answer",
   "version": "0.3.0",
   "description": "/answer: answer the questions in Claude's last reply in Claude Code's native question dialog",
+  "author": {
+    "name": "Phuengton Chummuel"
+  },
+  "repository": "https://github.com/PeteChu/cc-answer",
+  "license": "MIT",
   "userConfig": {
     "model": {
       "type": "string",

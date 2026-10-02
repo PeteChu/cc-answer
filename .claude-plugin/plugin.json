@@ -1,0 +1,14 @@
+{
+  "name": "answer",
+  "version": "0.1.0",
+  "description": "/answer: extract the questions from Claude's last reply and answer them in a pane",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "model": {
+      "type": "string",
+      "title": "Extraction model",
+      "description": "Model alias or id used to extract questions from the last reply",
+      "default": "haiku"
+    }
+  }
+}

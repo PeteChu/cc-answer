@@ -1,19 +1,22 @@
+import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import type { On } from 'claude-code'
+import { answerFor, batches, compileAnswers, parseExtraction } from '../hooks/lib'
 
-import { compileAnswers, parseExtraction } from '../hooks/lib'
+const opts = (...labels: string[]) => labels.map(label => ({ label, description: `${label} option` }))
 
 const EXTRACTED = JSON.stringify({
   questions: [
+    { question: 'Which database should we use?', header: 'Database choice', options: opts('PostgreSQL', 'SQLite') },
     {
-      question: 'Which features should ship first?',
-      header: 'Feature selection',
+      question: 'Which features ship in v1?',
+      header: 'Features',
       multiSelect: true,
-      options: [{ label: 'Search' }, 'Export', 'Search', 'Other (type it)', 'Sharing', 'Themes', 'Extra'],
+      options: opts('Search', 'Export', 'Other', 'Sharing', 'Themes', 'Extra'),
     },
-    { question: 'What should the service be called?', options: [] },
-    { question: '   ', options: ['Yes', 'No'] },
+    { question: 'Add integration tests now?', header: 'Tests', options: ['Yes', 'No'] },
+    { question: 'What should the service be called?', header: 'Name', options: [] },
+    { question: 'Where should it be deployed?', header: 'Deploy', options: opts('Fly.io', 'AWS') },
   ],
 })
 
@@ -24,52 +27,55 @@ const COMMAND = {
   origin: { kind: 'composer' as const },
   presentation: { isFullscreen: true, columns: 160 },
 }
+const ANSWERS: Record<string, string> = {
+  'Which database should we use?': 'PostgreSQL',
+  'Which features ship in v1?': 'Search, Sharing, Audit log',
+  'What should the service be called?': 'billing-api',
+  'Where should it be deployed?': 'AWS',
+}
+
+function engine(on: On) {
+  on('session.messages', () => ({ value: [{ role: 'assistant' as const, text: 'Five questions…', toolUses: [] }] }))
+  on('model.complete', () => ({ value: { isAnswered: true as const, text: EXTRACTED, usage: USAGE } }))
+  on('ui.status', () => ({ value: undefined }))
+  const submitted: string[] = []
+  on('prompt.submit', (_$, e) => {
+    submitted.push(e.text)
+    return { text: e.text }
+  })
+  return submitted
+}
 
 describe('lib', () => {
-  test('normalizes to what the question dialog accepts', () => {
-    const qs = parseExtraction('Here:\n```json\n' + EXTRACTED + '\n```') ?? []
-    expect(qs).toEqual([
-      {
-        question: 'Which features should ship first?',
-        header: 'Feature sele',
-        options: ['Search', 'Export', 'Sharing', 'Themes'],
-        multiSelect: true,
-      },
-      {
-        question: 'What should the service be called?',
-        header: 'Q2',
-        options: ['No preference', 'Not sure yet'],
-        multiSelect: false,
-      },
-    ])
+  test('normalizes to what the native dialog accepts', () => {
+    const qs = parseExtraction('```json\n' + EXTRACTED + '\n```') ?? []
+    expect(qs.length).toBe(5)
+    expect(qs[0]?.header).toBe('Database cho')
+    expect(qs[1]?.options.map(o => o.label)).toEqual(['Search', 'Export', 'Sharing', 'Themes'])
+    expect(qs[1]?.options[0]?.description).toBe('Search option')
+    expect(qs[3]?.options.map(o => o.label)).toEqual(['No preference', 'Not sure yet'])
+    expect(batches(qs).map(b => b.length)).toEqual([4, 1])
     expect(parseExtraction('not json')).toBe(null)
   })
 
-  test('compiles answered questions only', () => {
+  test('reads answers and compiles answered questions only', () => {
     const qs = parseExtraction(EXTRACTED) ?? []
-    expect(compileAnswers(qs, ['', 'billing-api'])).toBe('Q: What should the service be called?\nA: billing-api')
+    expect(answerFor({ 'Add integration tests now?': ['Yes', ' No '] }, 'Add integration tests now?')).toBe('Yes, No')
+    expect(compileAnswers(qs.slice(2, 4), ['', 'billing-api'])).toBe(
+      'Q: What should the service be called?\nA: billing-api',
+    )
   })
 })
 
-function engine(on: On) {
-  on('session.messages', () => ({ value: [{ role: 'assistant' as const, text: 'A few questions…', toolUses: [] }] }))
-  on('model.complete', () => ({ value: { isAnswered: true as const, text: EXTRACTED, usage: USAGE } }))
-  on('ui.status', () => ({ value: undefined }))
-}
-
-test('/answer asks each question in the native dialog and submits', async ($, on) => {
-  engine(on)
-  const asked: unknown[] = []
-  let submitted = ''
+test('/answer opens the native dialog with every question, in rounds of four, then submits', async ($, on) => {
+  const submitted = engine(on)
+  const rounds: unknown[][] = []
   on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
-    asked.push(e.questions)
-    const q = e.questions[0]!
-    const answer = q.multiSelect ? 'Search, Sharing' : 'billing-api'
-    return { result: { questions: e.questions, answers: { [q.question]: answer } } }
-  })
-  on('prompt.submit', (_$, e) => {
-    submitted = e.text
-    return { text: e.text }
+    rounds.push(e.questions)
+    const answers = Object.fromEntries(
+      e.questions.flatMap(q => (ANSWERS[q.question] ? [[q.question, ANSWERS[q.question]]] : [])),
+    )
+    return { result: { questions: e.questions, answers } }
   })
 
   const clock = mock.clock(on)
@@ -77,25 +83,37 @@ test('/answer asks each question in the native dialog and submits', async ($, on
   await clock.advance(0)
 
   expect(out.text).toBe(undefined)
-  expect(asked.length).toBe(2)
-  expect(submitted).toBe(
+  expect(rounds.map(r => r.length)).toEqual([4, 1])
+  expect(rounds[0]?.[1]).toMatchObject({ header: 'Features', multiSelect: true })
+  expect(submitted).toEqual([
     'I answered your questions in the following way:\n\n' +
-      'Q: Which features should ship first?\nA: Search, Sharing\n\n' +
-      'Q: What should the service be called?\nA: billing-api',
-  )
+      'Q: Which database should we use?\nA: PostgreSQL\n\n' +
+      'Q: Which features ship in v1?\nA: Search, Sharing, Audit log\n\n' +
+      'Q: What should the service be called?\nA: billing-api\n\n' +
+      'Q: Where should it be deployed?\nA: AWS',
+  ])
 })
 
-test('dismissing the dialog cancels without submitting', async ($, on) => {
-  engine(on)
-  let isSubmitted = false
-  on('tool.call', { tool: 'AskUserQuestion' }, () => ({ deny: 'dismissed' }))
-  on('prompt.submit', (_$, e) => {
-    isSubmitted = true
-    return { text: e.text }
+for (const [how, text, expected] of [
+  ['Esc', "The user doesn't want to proceed with this tool use.", 'answer: cancelled.'],
+  [
+    'Chat about this',
+    'The user wants to clarify these questions.',
+    'answer: cancelled. Tell Claude what you would like to clarify.',
+  ],
+] as const) {
+  test(`${how} in the dialog cancels without submitting`, async ($, on) => {
+    const submitted = engine(on)
+    let calls = 0
+    on('tool.call', { tool: 'AskUserQuestion' }, () => {
+      calls += 1
+      return { result: `Error: ${text}`, text, isError: true }
+    })
+
+    const out = await $.command.run(COMMAND)
+
+    expect(out.text).toBe(expected)
+    expect(calls).toBe(1)
+    expect(submitted).toEqual([])
   })
-
-  const out = await $.command.run(COMMAND)
-
-  expect(out.text).toBe('answer: cancelled after 0 of 2 questions.')
-  expect(isSubmitted).toBe(false)
-})
+}

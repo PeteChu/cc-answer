@@ -1,7 +1,7 @@
 {
   "name": "answer",
-  "version": "0.2.0",
-  "description": "/answer: extract the questions from Claude's last reply and answer them in the native AskUserQuestion dialog",
+  "version": "0.3.0",
+  "description": "/answer: answer the questions in Claude's last reply in Claude Code's native question dialog",
   "userConfig": {
     "model": {
       "type": "string",
@@ -9,6 +9,5 @@
       "description": "Model alias or id used to extract questions from the last reply",
       "default": "haiku"
     }
-  },
-  "types": "./types/index.d.ts"
+  }
 }

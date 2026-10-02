@@ -1,8 +1,8 @@
-/** One question in the shape the built-in AskUserQuestion dialog (`$.ui.ask`) takes. */
+/** One question in the shape the built-in AskUserQuestion dialog draws. */
 export type AskQuestion = {
   question: string
   header: string
-  options: string[]
+  options: { label: string; description: string }[]
   multiSelect: boolean
 }
 
@@ -15,7 +15,10 @@ Output ONLY a JSON object with this structure, no prose:
       "question": "Which database should the service use?",
       "header": "Database",
       "multiSelect": false,
-      "options": ["PostgreSQL", "SQLite"]
+      "options": [
+        { "label": "PostgreSQL", "description": "Mature relational option with a strong ecosystem" },
+        { "label": "SQLite", "description": "Embedded, zero setup" }
+      ]
     }
   ]
 }
@@ -24,50 +27,56 @@ Rules:
 - Extract all questions that require user input, in the order they appeared
 - "question" is clear, self-contained and ends with a question mark; fold in any context essential to answer it
 - "header" is a very short chip label, at most 12 characters (e.g. "Database", "Auth method")
-- Give 2 to 4 options per question; the dialog always adds its own free-text "Other", so never add an "Other" option
+- Give 2 to 4 options per question; the dialog always adds its own free-text "Type something" row, so never add an "Other" option
 - Extract every concrete choice stated or clearly implied by the text; for yes/no, confirmation or permission questions use "Yes" and "No"
-- For open-ended questions, offer 2 to 4 sensible suggestions the text supports
-- Option labels are concise (1-5 words), distinct, and fully answer the question on their own
+- For open-ended questions (a name, a description), offer 2 to 4 sensible suggestions the text supports
+- Option labels are concise (1-5 words) and fully answer the question on their own; each description is one short sentence
 - Set "multiSelect": true only when the choices are not mutually exclusive
 - If no questions are found, return {"questions": []}`
 
 export const SUBMIT_PREFIX = 'I answered your questions in the following way:'
 
-/** The dialog's limits: options per question, header length. */
+/** The dialog's limits, which it enforces: questions per dialog, options per question, header length. */
+export const MAX_QUESTIONS = 4
 const MAX_OPTIONS = 4
 const MIN_OPTIONS = 2
 const MAX_HEADER = 12
 
-/** Pads a question that came back with fewer than two options; "Other" still allows free text. */
-const PADDING = ['No preference', 'Not sure yet']
+/** Pads a question that came back with fewer than two options; "Type something" still takes free text. */
+const PADDING = [
+  { label: 'No preference', description: 'Go with whatever you think is best' },
+  { label: 'Not sure yet', description: 'I need more information before deciding' },
+]
 
 function str(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
 }
 
-/** Coerces the extractor's output into valid AskUserQuestion questions with unique texts. */
+/** Coerces the extractor's output into questions the dialog accepts, with unique texts. */
 export function normalizeQuestions(raw: unknown): AskQuestion[] {
   if (!Array.isArray(raw)) return []
   const out: AskQuestion[] = []
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue
     const q = item as Record<string, unknown>
-    const question = str(q.question)
+    let question = str(q.question)
     if (!question) continue
+    // The dialog answers by question text, so texts must be unique.
+    while (out.some(one => one.question === question)) question = `${question} (${out.length + 1})`
 
-    const options: string[] = []
+    const options: AskQuestion['options'] = []
     if (Array.isArray(q.options)) {
       for (const opt of q.options) {
-        // Accept plain labels and { label } objects alike.
-        const label = typeof opt === 'string' ? str(opt) : str((opt as Record<string, unknown> | null)?.label)
-        if (!label || /^other\b/i.test(label) || options.includes(label)) continue
-        options.push(label)
+        const record = opt && typeof opt === 'object' ? (opt as Record<string, unknown>) : {}
+        const label = typeof opt === 'string' ? str(opt) : str(record.label)
+        if (!label || /^(other|type something)\b/i.test(label) || options.some(o => o.label === label)) continue
+        options.push({ label, description: str(record.description) })
         if (options.length === MAX_OPTIONS) break
       }
     }
     for (const pad of PADDING) {
       if (options.length >= MIN_OPTIONS) break
-      if (!options.includes(pad)) options.push(pad)
+      if (!options.some(o => o.label === pad.label)) options.push(pad)
     }
 
     const header = (str(q.header) || `Q${out.length + 1}`).slice(0, MAX_HEADER).trim()
@@ -94,6 +103,21 @@ export function parseExtraction(text: string): AskQuestion[] | null {
     }
   }
   return null
+}
+
+/** Splits questions into dialogs of at most four. */
+export function batches<T>(items: readonly T[], size = MAX_QUESTIONS): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+/** Reads one answer from the dialog's `answers` map (question text -> answer). */
+export function answerFor(answers: unknown, question: string): string {
+  if (!answers || typeof answers !== 'object') return ''
+  const value = (answers as Record<string, unknown>)[question]
+  if (Array.isArray(value)) return value.map(str).filter(Boolean).join(', ')
+  return str(value)
 }
 
 /** Q/A blocks for every answered question; unanswered ones are left out. */

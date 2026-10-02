@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { answerFor, batches, compileAnswers, parseExtraction } from '../hooks/lib'
+import { answerFor, batches, compileAnswers, parseExtraction, repairJson } from '../hooks/lib'
 
 const opts = (...labels: string[]) => labels.map(label => ({ label, description: `${label} option` }))
 
@@ -34,9 +34,17 @@ const ANSWERS: Record<string, string> = {
   'Where should it be deployed?': 'AWS',
 }
 
-function engine(on: On) {
+function engine(on: On, replies: string[] = [EXTRACTED], logged: string[] = []) {
   on('session.messages', () => ({ value: [{ role: 'assistant' as const, text: 'Five questions…', toolUses: [] }] }))
-  on('model.complete', () => ({ value: { isAnswered: true as const, text: EXTRACTED, usage: USAGE } }))
+  let call = 0
+  on('model.complete', () => {
+    const text = replies[Math.min(call++, replies.length - 1)] as string
+    return { value: { isAnswered: true as const, text, usage: USAGE } }
+  })
+  on('ui.log', (_$, e) => {
+    logged.push(e.text)
+    return { value: undefined }
+  })
   on('ui.status', () => ({ value: undefined }))
   const submitted: string[] = []
   on('prompt.submit', (_$, e) => {
@@ -56,6 +64,22 @@ describe('lib', () => {
     expect(qs[3]?.options.map(o => o.label)).toEqual(['No preference', 'Not sure yet'])
     expect(batches(qs).map(b => b.length)).toEqual([4, 1])
     expect(parseExtraction('not json')).toBe(null)
+  })
+
+  test('reads replies models commonly get wrong', () => {
+    const q = (n: number) =>
+      `{ "question": "Question ${n}?", "header": "Q${n}", "options": [{ "label": "A" }, { "label": "B" }] }`
+    // Cut off mid-way, inside an unclosed fence: the whole questions survive.
+    const truncated =
+      '```json\n{ "questions": [' + q(1) + ', ' + q(2) + ', { "question": "Question 3?", "options": [{ "lab'
+    expect(parseExtraction(truncated)?.map(one => one.question)).toEqual(['Question 1?', 'Question 2?'])
+    // Prose around the object, trailing commas, a raw newline and smart quotes.
+    const messy =
+      'Sure! Here you go:\n{ \u201cquestions\u201d: [{ "question": "Pick\none?", "options": ["A", "B",], },], }\nHope that helps.'
+    expect(parseExtraction(messy)?.map(one => one.question)).toEqual(['Pick one?'])
+    expect(repairJson('{"a": "x\ny", "b": [1, 2,],}')).toBe('{"a": "x\\ny", "b": [1, 2]}')
+    expect(parseExtraction('{"questions": []}')).toEqual([])
+    expect(parseExtraction('There are no questions in this reply.')).toBe(null)
   })
 
   test('reads answers and compiles answered questions only', () => {
@@ -95,11 +119,11 @@ test('/answer opens the native dialog with every question, in rounds of four, th
 })
 
 for (const [how, text, expected] of [
-  ['Esc', "The user doesn't want to proceed with this tool use.", 'answer: cancelled.'],
+  ['Esc', "The user doesn't want to proceed with this tool use.", 'cancelled.'],
   [
     'Chat about this',
     'The user wants to clarify these questions.',
-    'answer: cancelled. Tell Claude what you would like to clarify.',
+    'cancelled. Tell Claude what you would like to clarify.',
   ],
 ] as const) {
   test(`${how} in the dialog cancels without submitting`, async ($, on) => {
@@ -117,3 +141,42 @@ for (const [how, text, expected] of [
     expect(submitted).toEqual([])
   })
 }
+
+test('an unreadable first reply is retried once with a stricter instruction', async ($, on) => {
+  const submitted = engine(on, ['Here are the questions: 1. Database? 2. Name?', EXTRACTED])
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => ({ result: { questions: e.questions, answers: ANSWERS } }))
+  const clock = mock.clock(on)
+
+  const out = await $.command.run(COMMAND)
+  await clock.advance(0)
+
+  expect(out.text).toBe(undefined)
+  expect(submitted.length).toBe(1)
+})
+
+test('when both replies are unreadable, the message shows what the model said', async ($, on) => {
+  engine(on, ['I could not find any JSON-worthy questions, sorry.'])
+  const out = await $.command.run(COMMAND)
+  expect(out.text).toBe(
+    'haiku did not return the questions as JSON. It replied: "I could not find any JSON-worthy questions, sorry." (50 chars)',
+  )
+})
+
+test('/answer --debug ends with the raw replies and the parsed questions', async ($, on) => {
+  engine(on, ['nope', EXTRACTED])
+  on('tool.call', { tool: 'AskUserQuestion' }, () => ({ result: 'Error: dismissed', text: 'dismissed', isError: true }))
+
+  const out = await $.command.run({ ...COMMAND, args: '--debug' })
+
+  expect(out.text?.startsWith('cancelled.\n\nanswer --debug · model haiku')).toBe(true)
+  expect(out.text).toContain('── raw reply ──\n4 chars\nnope')
+  expect(out.text).toContain('── retry (first reply did not parse) ──')
+  expect(out.text).toContain('2. [Features] (multi-select) Which features ship in v1?')
+  expect(out.text).toContain('     - Search — Search option')
+})
+
+test('/answer --debug shows the report even when extraction fails', async ($, on) => {
+  engine(on, ['no json here'])
+  const out = await $.command.run({ ...COMMAND, args: '--debug' })
+  expect(out.text).toContain('── parsed ──\nnothing: no "questions" array could be read')
+})

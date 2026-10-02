@@ -85,24 +85,109 @@ export function normalizeQuestions(raw: unknown): AskQuestion[] {
   return out
 }
 
-/** Reads the extractor's reply: bare JSON, a fenced block, or the outermost {...}. */
-export function parseExtraction(text: string): AskQuestion[] | null {
-  const candidates: string[] = []
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/)
-  if (fenced?.[1]) candidates.push(fenced[1].trim())
-  candidates.push(text.trim())
-  const first = text.indexOf('{')
-  const last = text.lastIndexOf('}')
-  if (first >= 0 && last > first) candidates.push(text.slice(first, last + 1))
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as { questions?: unknown }
-      if (parsed && Array.isArray(parsed.questions)) return normalizeQuestions(parsed.questions)
-    } catch {
-      // try the next candidate
+/**
+ * Repairs what models commonly get wrong in JSON: raw newlines and tabs inside
+ * strings, smart quotes used as delimiters, and trailing commas.
+ */
+export function repairJson(text: string): string {
+  let out = ''
+  let inString = false
+  // A string a smart quote opened is closed by a smart quote too.
+  let isSmart = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i] as string
+    if (inString) {
+      if (ch === '\\') {
+        out += ch + (text[i + 1] ?? '')
+        i++
+      } else if (ch === '"' || (isSmart && (ch === '“' || ch === '”'))) {
+        inString = false
+        out += '"'
+      } else if (ch === '"' || ch === '“' || ch === '”') out += ch
+      else if (ch === '\n') out += '\\n'
+      else if (ch === '\r') out += '\\r'
+      else if (ch === '\t') out += '\\t'
+      else out += ch
+      continue
+    }
+    if (ch === '"' || ch === '\u201c' || ch === '\u201d') {
+      inString = true
+      isSmart = ch !== '"'
+      out += '"'
+    } else if (ch === ',') {
+      // Drop a comma that only precedes a closing bracket.
+      const rest = text.slice(i + 1).match(/^\s*([}\]])/)
+      if (!rest) out += ch
+    } else out += ch
+  }
+  return out
+}
+
+/** The end (exclusive) of the balanced {...} or [...] starting at `start`, or -1 when it never closes. */
+function balancedEnd(text: string, start: number): number {
+  let depth = 0
+  let inString = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (ch === '\\') i++
+      else if (ch === '"') inString = false
+    } else if (ch === '"') inString = true
+    else if (ch === '{' || ch === '[') depth++
+    else if (ch === '}' || ch === ']') {
+      depth--
+      if (depth === 0) return i + 1
     }
   }
-  return null
+  return -1
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Reads the extractor's reply into raw question objects: the whole reply, the
+ * first balanced object holding "questions", and failing those, each complete
+ * element of the "questions" array, so a reply cut off mid-way keeps the
+ * questions that did arrive whole. Null when no "questions" array is found.
+ */
+export function readQuestions(reply: string): unknown[] | null {
+  const text = repairJson(reply.replace(/```(?:json)?/g, ''))
+  const whole = parseJson(text.trim()) as { questions?: unknown } | undefined
+  if (whole && Array.isArray(whole.questions)) return whole.questions
+
+  for (let at = text.indexOf('{'); at >= 0; at = text.indexOf('{', at + 1)) {
+    const end = balancedEnd(text, at)
+    if (end < 0) break
+    const found = parseJson(text.slice(at, end)) as { questions?: unknown } | undefined
+    if (found && Array.isArray(found.questions)) return found.questions
+  }
+
+  const key = text.search(/"questions"\s*:\s*\[/)
+  if (key < 0) return null
+  const items: unknown[] = []
+  let at = text.indexOf('[', key) + 1
+  for (;;) {
+    const open = text.indexOf('{', at)
+    if (open < 0) break
+    const end = balancedEnd(text, open)
+    if (end < 0) break
+    const item = parseJson(text.slice(open, end))
+    if (item !== undefined) items.push(item)
+    at = end
+  }
+  return items
+}
+
+/** The extractor's reply as dialog-ready questions, or null when it holds no "questions" array. */
+export function parseExtraction(text: string): AskQuestion[] | null {
+  const raw = readQuestions(text)
+  return raw === null ? null : normalizeQuestions(raw)
 }
 
 /** Splits questions into dialogs of at most four. */

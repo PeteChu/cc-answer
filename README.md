@@ -10,6 +10,12 @@ A Claude Code mod that ports the [Pi `answer` extension](https://github.com/Pete
 
 Under the hood, the mod calls `$.ui.ask` with a placeholder question. Its `tool.call` hook then swaps the extracted questions into that AskUserQuestion call, so the engine draws its native multi-question dialog and the hook reads every answer back. Claude's own AskUserQuestion calls pass through untouched.
 
+## Troubleshooting: `/answer --debug`
+
+`/answer --debug` ends with an extraction report: the model used, its raw reply (and the retry's, when the first one did not parse), and the questions it parsed with their options. It shows straight away when extraction fails, or after the dialog closes. The report is part of the command's output, so Claude can read it too.
+
+Extraction tolerates the usual model slips: prose or code fences around the JSON, trailing commas, raw newlines in strings, smart quotes, and a reply cut off partway (the questions that arrived whole are kept). If the reply still can't be read, `/answer` retries once with a stricter instruction and more room. If that fails too, it says what the model replied.
+
 ## Install
 
 The repo root is the plugin folder:

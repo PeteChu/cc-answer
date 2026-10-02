@@ -1,19 +1,13 @@
 # cc-mods-answer
 
-A Claude Code mod that ports the [Pi `answer` extension](https://github.com/PeteChu/pi-extensions/tree/main/answer): run `/answer` after Claude asks you something, and answer every question in an interactive pane instead of retyping them in the prompt.
+A Claude Code mod that ports the [Pi `answer` extension](https://github.com/PeteChu/pi-extensions/tree/main/answer): run `/answer` after Claude asks you something, and answer every question in Claude Code's native question dialog instead of retyping them in the prompt.
 
 ## How it works
 
-1. **Extraction**: `/answer` takes Claude's latest reply that has text and asks a small model (`haiku` by default) to pull out the questions as JSON: each one gets an id, an optional header and context, and choices when a fixed set can be inferred.
-2. **Answering**: a focused pane shows one question at a time:
-   - numbered options (press `1`–`9` or click). Single-select moves on to the next question as soon as you pick.
-   - an **Other / Answer** text field for a custom answer (Enter saves it and moves on)
-   - **Multi-select** turns the options into checkboxes; picks and custom text are joined with `, `
-   - **← Prev / Next →** to move between questions, plus a progress strip (`✓` answered, `●` current, `·` open)
-3. **Review & submit**: the review screen shows the compiled Q/A. **Submit** sends one prompt that starts with
-   `I answered your questions in the following way:` and Claude's next turn begins. Unanswered questions are left out.
-
-**Drafts**: closing the pane (Esc or **Later**) keeps your answers for the session. Running `/answer` again on the same reply brings them back without extracting again. Use `/answer new` to extract again.
+1. **Extraction**: `/answer` takes Claude's latest reply that has text and asks a small model (`haiku` by default) to pull out the questions as JSON, shaped for the question dialog: a short header, 2–4 option labels, and single or multi-select.
+2. **Answering**: no custom UI. Each question opens Claude Code's own **AskUserQuestion** dialog through `$.ui.ask`, the same one Claude uses when it asks you something. Pick an option, pick several for multi-select questions, or type your own answer under **Other**. Dismissing the dialog cancels `/answer`, and nothing is sent.
+3. **Submit**: the answers are compiled into one prompt that starts with
+   `I answered your questions in the following way:`, followed by `Q:`/`A:` pairs, and Claude's next turn begins.
 
 ## Install
 
@@ -41,7 +35,6 @@ claude plugin test .       # runs tests/*.test.ts
 
 Layout:
 
-- `hooks/register.tsx`: the `/answer` command, extraction, and the pane UI
-- `hooks/lib.ts`: the extraction prompt, parsing/normalizing, and answer compilation
-- `types/index.d.ts`: the session-state contract (`answer.session`)
-- `tests/answer.test.ts`: unit tests, plus an end-to-end test (extract → answer → submit) on the terminal and desktop surfaces
+- `hooks/register.ts`: the `/answer` command: extract, ask each question with `$.ui.ask`, submit
+- `hooks/lib.ts`: the extraction prompt, and normalizing questions to the dialog's limits (header ≤ 12 chars, 2–4 options, no "Other")
+- `tests/answer.test.ts`: unit tests, plus end-to-end tests of answering and of dismissing, with the dialog mocked beneath the plugin

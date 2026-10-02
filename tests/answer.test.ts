@@ -1,106 +1,101 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { compileAnswers, emptyResponse, parseExtraction, pickOption, setCustom, toggleMulti } from '../hooks/lib'
+import type { On } from 'claude-code'
+
+import { compileAnswers, parseExtraction } from '../hooks/lib'
 
 const EXTRACTED = JSON.stringify({
   questions: [
     {
-      id: 'db',
-      header: 'Database',
-      question: 'Which database should we use?',
-      options: [
-        { label: 'PostgreSQL', description: 'Relational' },
-        { label: 'SQLite', description: 'Embedded' },
-      ],
+      question: 'Which features should ship first?',
+      header: 'Feature selection',
+      multiSelect: true,
+      options: [{ label: 'Search' }, 'Export', 'Search', 'Other (type it)', 'Sharing', 'Themes', 'Extra'],
     },
-    { id: 'name', question: 'What should the service be called?', options: [] },
+    { question: 'What should the service be called?', options: [] },
+    { question: '   ', options: ['Yes', 'No'] },
   ],
 })
 
-const PANE = {
-  title: 'Answer',
-  isFocused: true,
-  bodyColumns: 80,
-  placement: 'dock' as const,
-  scroll: { offset: 0, bodyRows: 30 },
-  view: {},
+const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+const COMMAND = {
+  command: 'answer',
+  args: '',
+  origin: { kind: 'composer' as const },
+  presentation: { isFullscreen: true, columns: 160 },
 }
 
-const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
-
 describe('lib', () => {
-  test('parses fenced JSON and normalizes questions', () => {
-    const qs = parseExtraction('Here:\n```json\n' + EXTRACTED + '\n```')
-    expect(qs?.length).toBe(2)
-    expect(qs?.[0]?.options.map(o => o.label)).toEqual(['PostgreSQL', 'SQLite'])
+  test('normalizes to what the question dialog accepts', () => {
+    const qs = parseExtraction('Here:\n```json\n' + EXTRACTED + '\n```') ?? []
+    expect(qs).toEqual([
+      {
+        question: 'Which features should ship first?',
+        header: 'Feature sele',
+        options: ['Search', 'Export', 'Sharing', 'Themes'],
+        multiSelect: true,
+      },
+      {
+        question: 'What should the service be called?',
+        header: 'Q2',
+        options: ['No preference', 'Not sure yet'],
+        multiSelect: false,
+      },
+    ])
     expect(parseExtraction('not json')).toBe(null)
-    expect(parseExtraction('{"questions":[{"question":"  "}]}')).toEqual([])
   })
 
-  test('single, multi and custom answers compile; unanswered are omitted', () => {
+  test('compiles answered questions only', () => {
     const qs = parseExtraction(EXTRACTED) ?? []
-    let first = pickOption(emptyResponse(), 1)
-    expect(first.selected).toEqual([1])
-    first = setCustom(first, 'DuckDB')
-    expect(first.selected).toEqual([])
-    let multi = toggleMulti(emptyResponse())
-    multi = pickOption(pickOption(multi, 1), 0)
-    multi = setCustom(multi, 'Redis')
-    expect(compileAnswers(qs, [multi, emptyResponse()])).toBe(
-      'Q: Which database should we use?\nA: PostgreSQL, SQLite, Redis',
-    )
+    expect(compileAnswers(qs, ['', 'billing-api'])).toBe('Q: What should the service be called?\nA: billing-api')
   })
 })
 
-test('/answer extracts, answers in the pane and submits', async ($, on) => {
-  let submitted = ''
-  on('session.messages', () => ({
-    value: [
-      { role: 'user' as const, text: 'Plan the service', toolUses: [] },
-      { role: 'assistant' as const, text: 'Which database? And the name?', toolUses: [] },
-    ],
-  }))
+function engine(on: On) {
+  on('session.messages', () => ({ value: [{ role: 'assistant' as const, text: 'A few questions…', toolUses: [] }] }))
   on('model.complete', () => ({ value: { isAnswered: true as const, text: EXTRACTED, usage: USAGE } }))
+  on('ui.status', () => ({ value: undefined }))
+}
+
+test('/answer asks each question in the native dialog and submits', async ($, on) => {
+  engine(on)
+  const asked: unknown[] = []
+  let submitted = ''
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
+    asked.push(e.questions)
+    const q = e.questions[0]!
+    const answer = q.multiSelect ? 'Search, Sharing' : 'billing-api'
+    return { result: { questions: e.questions, answers: { [q.question]: answer } } }
+  })
   on('prompt.submit', (_$, e) => {
     submitted = e.text
     return { text: e.text }
   })
 
-  let isOpen = false
-  on('ui.open', () => {
-    isOpen = true
-    return { value: { isPlaced: true as const } }
-  })
-  on('ui.close', () => {
-    isOpen = false
-    return { value: undefined }
-  })
+  const clock = mock.clock(on)
+  const out = await $.command.run(COMMAND)
+  await clock.advance(0)
 
-  await $.command.run({
-    command: 'answer',
-    args: '',
-    origin: { kind: 'composer' },
-    presentation: { isFullscreen: true, columns: 160 },
-  })
-  expect(isOpen).toBe(true)
-
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'answer', surface, component: 'Pane', props: PANE, requestId: 'answer' })
-    expect((await ui.find({ type: 'Text', text: /Which database/ }))?.type).toBe('Text')
-    await ui.unmount()
-  }
-
-  const ui = await $.ui.mount({ plugin: 'answer', surface: 'terminal', component: 'Pane', props: PANE, requestId: 'answer' })
-  await ui.press({ key: 'opt:0' })
-  expect((await ui.find({ type: 'Text', text: /service be called/ }))?.type).toBe('Text')
-  await ui.input({ key: 'custom:name', text: 'billing-api' })
-  expect((await ui.find({ key: 'submit' }))?.type).toBe('Button')
-  await ui.press({ key: 'submit' })
-
+  expect(out.text).toBe(undefined)
+  expect(asked.length).toBe(2)
   expect(submitted).toBe(
     'I answered your questions in the following way:\n\n' +
-      'Q: Which database should we use?\nA: PostgreSQL\n\n' +
+      'Q: Which features should ship first?\nA: Search, Sharing\n\n' +
       'Q: What should the service be called?\nA: billing-api',
   )
-  expect(isOpen).toBe(false)
+})
+
+test('dismissing the dialog cancels without submitting', async ($, on) => {
+  engine(on)
+  let isSubmitted = false
+  on('tool.call', { tool: 'AskUserQuestion' }, () => ({ deny: 'dismissed' }))
+  on('prompt.submit', (_$, e) => {
+    isSubmitted = true
+    return { text: e.text }
+  })
+
+  const out = await $.command.run(COMMAND)
+
+  expect(out.text).toBe('answer: cancelled after 0 of 2 questions.')
+  expect(isSubmitted).toBe(false)
 })

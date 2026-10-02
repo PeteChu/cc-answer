@@ -33,9 +33,21 @@ For persistent loading, set `CLAUDE_CODE_PLUGIN_DIRS=/path/to/cc-answer` in your
 2. **Answering**: the questions open in Claude Code's **own AskUserQuestion dialog**, the same one Claude uses to ask you something, right above the prompt. One tab per question; ↑/↓ and Enter to pick, Tab/←/→ to switch questions, checkboxes for multi-select, **Type something** to answer in your own words, a review screen before **Submit answers**, and Esc to cancel. The dialog holds up to 4 questions, so a fifth and later ones come in another round.
 3. **Submit**: the answers go to Claude as one prompt that starts with `I answered your questions in the following way:`, followed by `Q:`/`A:` pairs. Unanswered questions are left out.
 
-Under the hood, the mod calls `$.ui.ask` with a placeholder question. Its `tool.call` hook then swaps the extracted questions into that AskUserQuestion call, so the engine draws its native multi-question dialog and the hook reads every answer back. Claude's own AskUserQuestion calls pass through untouched.
-
 Extraction uses **`haiku` by default**. Change the `model` option in `/config`, or set `pluginConfigs.answer.options.model` in settings to another model alias or ID.
+
+### Prompts sent by the mod
+
+- **Extraction model call (`$.model.complete`)**: the prompt is the full text of the latest non-empty assistant reply, unchanged. The system prompt is [`SYSTEM_PROMPT` in `hooks/lib.ts`](hooks/lib.ts): it instructs the model to extract user-facing questions in order as JSON, include essential context, use headers of at most 12 characters, provide 2–4 concise options with descriptions (Yes/No for confirmations and suggestions for open-ended questions), omit an "Other" option, mark multi-select only for compatible choices, and return an empty questions array when none are found. No other conversation messages, files, or tool results are included by the mod.
+- **Retry**: if the first reply cannot be parsed, the mod sends the same assistant text and system prompt once more, appending: `Your reply must be exactly one JSON object and nothing else: no prose, no code fences, no commentary. Escape quotes and newlines inside strings.`
+- **Conversation submission (`$.prompt.submit`)**: after all dialog rounds complete, the mod submits a new user message (`asUser: true`) beginning exactly with `I answered your questions in the following way:`, then a blank line and `Q: <extracted question>` / `A: <your answer>` blocks separated by blank lines. Questions are model-extracted and may be rephrased; answers are selected option labels or your custom text, with whitespace normalized. Multiple selections are joined with `,`. Unanswered questions are omitted. Cancellation or no answers means no prompt is submitted. No additional instructions are appended.
+
+With `--debug`, the command output also contains the extraction model name, raw model replies, and parsed questions/options; Claude can read that output. Extraction failures may include a snippet of the model reply even without `--debug`.
+
+### Intentional tool-input changes
+
+The mod changes **only `AskUserQuestion`**, through its `tool.call` hook. `/answer` calls `$.ui.ask` with the placeholder `Answer Claude's questions?`, header `Answer`, and options `Answer` / `Cancel`. While a round is pending, the hook matches that placeholder as the first question and calls `next({ ...e, questions })`, replacing the entire `questions` array with up to four extracted questions. Each has `question`, `header`, `options` (labels and descriptions), and `multiSelect`; all other event fields are preserved. This lets the native dialog display the extracted questions instead of the placeholder. The hook reads the returned answers or cancellation and returns the tool result unchanged.
+
+If no round is pending or the first question does not match the placeholder, the hook calls **`next(e)` unchanged**. Ordinary Claude-generated `AskUserQuestion` calls pass through under that rule; all other tools are outside the hook's filter and are not modified.
 
 Custom text entry is available on terminal and desktop surfaces. On mobile, answers are limited to the extracted options.
 

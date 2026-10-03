@@ -1,7 +1,4 @@
-import type { EngineInterface, Register } from 'claude-code'
-
-import type { AskQuestion } from './lib'
-import { SUBMIT_PREFIX, SYSTEM_PROMPT, answerFor, batches, compileAnswers, parseExtraction } from './lib'
+import { SUBMIT_PREFIX, SYSTEM_PROMPT, answerFor, batches, compileAnswers, parseExtraction } from './lib.mjs'
 
 /**
  * `$.ui.ask` opens the engine's own AskUserQuestion dialog but takes a single
@@ -12,27 +9,19 @@ import { SUBMIT_PREFIX, SYSTEM_PROMPT, answerFor, batches, compileAnswers, parse
  */
 const PLACEHOLDER = "Answer Claude's questions?"
 
-const LIMITS = { maxTokens: 8192, effort: 'low', timeoutMs: 120_000 } as const
+const LIMITS = { maxTokens: 8192, effort: 'low', timeoutMs: 120_000 }
 const STRICT =
   'Your reply must be exactly one JSON object and nothing else: no prose, no code fences, no commentary. Escape quotes and newlines inside strings.'
 
 /** The start of a reply, on one line, for an error message. */
-const snippet = (text: string) => {
+const snippet = text => {
   const line = text.replace(/\s+/g, ' ').trim()
   return line ? `"${line.length > 160 ? `${line.slice(0, 160)}…` : line}" (${text.length} chars)` : '(empty)'
 }
 
-type Reply = Awaited<ReturnType<EngineInterface['model']['complete']>>
-
 /** What `/answer --debug` prints before the dialog: the model, its raw reply per attempt, and what was parsed. */
-function debugReport(
-  model: string,
-  input: string,
-  first: Reply,
-  retry: Reply,
-  questions: AskQuestion[] | null,
-): string {
-  const raw = (r: Reply) => (r.isAnswered ? `${r.text.length} chars\n${r.text}` : `no reply (${r.reason})`)
+function debugReport(model, input, first, retry, questions) {
+  const raw = r => (r.isAnswered ? `${r.text.length} chars\n${r.text}` : `no reply (${r.reason})`)
   const lines = [
     `answer --debug · model ${model} · last reply ${input.length} chars`,
     '',
@@ -50,20 +39,22 @@ function debugReport(
   return lines.join('\n')
 }
 
-type Outcome = { answers: unknown } | { cancel: 'dismissed' | 'clarify' }
+/** @type {import('./lib.mjs').AskQuestion[] | null} */
+let round = null
+/** @type {{ answers: unknown } | { cancel: 'dismissed' | 'clarify' } | null} */
+let outcome = null
 
-let round: AskQuestion[] | null = null
-let outcome: Outcome | null = null
-
-export const register: Register = (on, options) => {
+/** @type {import('claude-code').Register} */
+export const register = (on, options) => {
   const model = typeof options.model === 'string' && options.model.trim() ? options.model.trim() : 'haiku'
 
   on('session.start', async ($, e, next) => {
+    const r = await next(e)
     await $.command.register({
       name: 'answer',
       description: "Answer the questions in Claude's last reply in the question dialog (--debug shows the extraction)",
     })
-    return next(e)
+    return r
   })
 
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
@@ -72,7 +63,7 @@ export const register: Register = (on, options) => {
     if (!questions || e.questions[0]?.question !== PLACEHOLDER) return next(e)
     round = null
     const ran = await next({ ...e, questions })
-    const result: unknown = ran.result
+    const result = ran.result
     if (!ran.isError && result && typeof result === 'object' && 'answers' in result) {
       outcome = { answers: result.answers }
     } else {
@@ -106,7 +97,7 @@ export const register: Register = (on, options) => {
     $.ui.status(undefined)
     // With --debug, every way out of the command ends with the extraction report.
     const report = isDebug ? debugReport(model, last.text, first, reply, questions) : ''
-    const done = (text?: string) => {
+    const done = text => {
       const out = [text, report].filter(Boolean).join('\n\n')
       return out ? { text: out } : {}
     }
@@ -118,7 +109,7 @@ export const register: Register = (on, options) => {
     if (questions.length === 0) return done('no questions found in the last reply.')
 
     // The dialog holds up to four questions; more come as further rounds.
-    const answers: string[] = []
+    const answers = []
     for (const batch of batches(questions)) {
       round = batch
       outcome = null
@@ -128,8 +119,8 @@ export const register: Register = (on, options) => {
         // The placeholder itself is never answered, so the ask rejects; the hook kept the outcome.
       }
       round = null
-      // Set by the tool.call hook while the ask ran; the cast undoes the narrowing to the null set above.
-      const got = outcome as Outcome | null
+      // Set by the tool.call hook while the ask ran.
+      const got = outcome
       if (!got || 'cancel' in got) {
         return done(got?.cancel === 'clarify' ? 'cancelled. Tell Claude what you would like to clarify.' : 'cancelled.')
       }

@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { answerFor, batches, compileAnswers, parseExtraction, repairJson } from '../hooks/lib'
+import { answerFor, batches, compileAnswers, parseExtraction, repairJson } from '../hooks/lib.mjs'
 
 const opts = (...labels: string[]) => labels.map(label => ({ label, description: `${label} option` }))
 

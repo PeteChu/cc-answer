@@ -37,7 +37,7 @@ Extraction uses **`haiku` by default**. Change the `model` option in `/config`, 
 
 ### Prompts sent by the mod
 
-- **Extraction model call (`$.model.complete`)**: the prompt is the full text of the latest non-empty assistant reply, unchanged. The system prompt is [`SYSTEM_PROMPT` in `hooks/lib.ts`](hooks/lib.ts): it instructs the model to extract user-facing questions in order as JSON, include essential context, use headers of at most 12 characters, provide 2–4 concise options with descriptions (Yes/No for confirmations and suggestions for open-ended questions), omit an "Other" option, mark multi-select only for compatible choices, and return an empty questions array when none are found. No other conversation messages, files, or tool results are included by the mod.
+- **Extraction model call (`$.model.complete`)**: the prompt is the full text of the latest non-empty assistant reply, unchanged. The system prompt is [`SYSTEM_PROMPT` in `hooks/lib.mjs`](hooks/lib.mjs): it instructs the model to extract user-facing questions in order as JSON, include essential context, use headers of at most 12 characters, provide 2–4 concise options with descriptions (Yes/No for confirmations and suggestions for open-ended questions), omit an "Other" option, mark multi-select only for compatible choices, and return an empty questions array when none are found. No other conversation messages, files, or tool results are included by the mod.
 - **Retry**: if the first reply cannot be parsed, the mod sends the same assistant text and system prompt once more, appending: `Your reply must be exactly one JSON object and nothing else: no prose, no code fences, no commentary. Escape quotes and newlines inside strings.`
 - **Conversation submission (`$.prompt.submit`)**: after all dialog rounds complete, the mod submits a new user message (`asUser: true`) beginning exactly with `I answered your questions in the following way:`, then a blank line and `Q: <extracted question>` / `A: <your answer>` blocks separated by blank lines. Questions are model-extracted and may be rephrased; answers are selected option labels or your custom text, with whitespace normalized. Multiple selections are joined with `,`. Unanswered questions are omitted. Cancellation or no answers means no prompt is submitted. No additional instructions are appended.
 
@@ -78,8 +78,8 @@ claude plugin test .       # Run unit and end-to-end tests
 
 Layout:
 
-- `hooks/register.ts`: the `/answer` command (extraction, one retry, the `--debug` report) and the `tool.call` hook that fills the native dialog
-- `hooks/lib.ts`: the extraction prompt, JSON repair and recovery from replies cut off partway, fitting questions to the dialog's limits (header ≤ 12 chars, 2–4 options, ≤ 4 questions per round), and compiling the answers
+- `hooks/register.mjs`: the `/answer` command (extraction, one retry, the `--debug` report) and the `tool.call` hook that fills the native dialog
+- `hooks/lib.mjs`: the extraction prompt, JSON repair and recovery from replies cut off partway, fitting questions to the dialog's limits (header ≤ 12 chars, 2–4 options, ≤ 4 questions per round), and compiling the answers
 - `tests/answer.test.ts`: tests, with the model and the dialog faked beneath the plugin: JSON repairs, rounds of four, the submitted prompt, Esc and "Chat about this", the retry, and the `--debug` report
 
 ## License

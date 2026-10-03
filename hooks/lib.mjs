@@ -1,10 +1,7 @@
-/** One question in the shape the built-in AskUserQuestion dialog draws. */
-export type AskQuestion = {
-  question: string
-  header: string
-  options: { label: string; description: string }[]
-  multiSelect: boolean
-}
+/**
+ * One question in the shape the built-in AskUserQuestion dialog draws.
+ * @typedef {{ question: string, header: string, options: { label: string, description: string }[], multiSelect: boolean }} AskQuestion
+ */
 
 export const SYSTEM_PROMPT = `You are a question extractor. Given text from a conversation, extract every question that needs an answer from the user, shaped for a multiple-choice dialog.
 
@@ -48,26 +45,29 @@ const PADDING = [
   { label: 'Not sure yet', description: 'I need more information before deciding' },
 ]
 
-function str(value: unknown): string {
+/** @returns {string} */
+function str(value) {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
 }
 
-/** Coerces the extractor's output into questions the dialog accepts, with unique texts. */
-export function normalizeQuestions(raw: unknown): AskQuestion[] {
+/**
+ * Coerces the extractor's output into questions the dialog accepts, with unique texts.
+ * @returns {AskQuestion[]}
+ */
+export function normalizeQuestions(raw) {
   if (!Array.isArray(raw)) return []
-  const out: AskQuestion[] = []
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue
-    const q = item as Record<string, unknown>
+  const out = []
+  for (const q of raw) {
+    if (!q || typeof q !== 'object') continue
     let question = str(q.question)
     if (!question) continue
     // The dialog answers by question text, so texts must be unique.
     while (out.some(one => one.question === question)) question = `${question} (${out.length + 1})`
 
-    const options: AskQuestion['options'] = []
+    const options = []
     if (Array.isArray(q.options)) {
       for (const opt of q.options) {
-        const record = opt && typeof opt === 'object' ? (opt as Record<string, unknown>) : {}
+        const record = opt && typeof opt === 'object' ? opt : {}
         const label = typeof opt === 'string' ? str(opt) : str(record.label)
         if (!label || /^(other|type something)\b/i.test(label) || options.some(o => o.label === label)) continue
         options.push({ label, description: str(record.description) })
@@ -88,14 +88,15 @@ export function normalizeQuestions(raw: unknown): AskQuestion[] {
 /**
  * Repairs what models commonly get wrong in JSON: raw newlines and tabs inside
  * strings, smart quotes used as delimiters, and trailing commas.
+ * @param {string} text
  */
-export function repairJson(text: string): string {
+export function repairJson(text) {
   let out = ''
   let inString = false
   // A string a smart quote opened is closed by a smart quote too.
   let isSmart = false
   for (let i = 0; i < text.length; i++) {
-    const ch = text[i] as string
+    const ch = text[i]
     if (inString) {
       if (ch === '\\') {
         out += ch + (text[i + 1] ?? '')
@@ -110,7 +111,7 @@ export function repairJson(text: string): string {
       else out += ch
       continue
     }
-    if (ch === '"' || ch === '\u201c' || ch === '\u201d') {
+    if (ch === '"' || ch === '“' || ch === '”') {
       inString = true
       isSmart = ch !== '"'
       out += '"'
@@ -124,7 +125,7 @@ export function repairJson(text: string): string {
 }
 
 /** The end (exclusive) of the balanced {...} or [...] starting at `start`, or -1 when it never closes. */
-function balancedEnd(text: string, start: number): number {
+function balancedEnd(text, start) {
   let depth = 0
   let inString = false
   for (let i = start; i < text.length; i++) {
@@ -142,7 +143,7 @@ function balancedEnd(text: string, start: number): number {
   return -1
 }
 
-function parseJson(text: string): unknown {
+function parseJson(text) {
   try {
     return JSON.parse(text)
   } catch {
@@ -155,22 +156,24 @@ function parseJson(text: string): unknown {
  * first balanced object holding "questions", and failing those, each complete
  * element of the "questions" array, so a reply cut off mid-way keeps the
  * questions that did arrive whole. Null when no "questions" array is found.
+ * @param {string} reply
+ * @returns {unknown[] | null}
  */
-export function readQuestions(reply: string): unknown[] | null {
+export function readQuestions(reply) {
   const text = repairJson(reply.replace(/```(?:json)?/g, ''))
-  const whole = parseJson(text.trim()) as { questions?: unknown } | undefined
+  const whole = parseJson(text.trim())
   if (whole && Array.isArray(whole.questions)) return whole.questions
 
   for (let at = text.indexOf('{'); at >= 0; at = text.indexOf('{', at + 1)) {
     const end = balancedEnd(text, at)
     if (end < 0) break
-    const found = parseJson(text.slice(at, end)) as { questions?: unknown } | undefined
+    const found = parseJson(text.slice(at, end))
     if (found && Array.isArray(found.questions)) return found.questions
   }
 
   const key = text.search(/"questions"\s*:\s*\[/)
   if (key < 0) return null
-  const items: unknown[] = []
+  const items = []
   let at = text.indexOf('[', key) + 1
   for (;;) {
     const open = text.indexOf('{', at)
@@ -184,29 +187,42 @@ export function readQuestions(reply: string): unknown[] | null {
   return items
 }
 
-/** The extractor's reply as dialog-ready questions, or null when it holds no "questions" array. */
-export function parseExtraction(text: string): AskQuestion[] | null {
+/**
+ * The extractor's reply as dialog-ready questions, or null when it holds no "questions" array.
+ * @param {string} text
+ * @returns {AskQuestion[] | null}
+ */
+export function parseExtraction(text) {
   const raw = readQuestions(text)
   return raw === null ? null : normalizeQuestions(raw)
 }
 
-/** Splits questions into dialogs of at most four. */
-export function batches<T>(items: readonly T[], size = MAX_QUESTIONS): T[][] {
-  const out: T[][] = []
+/**
+ * Splits questions into dialogs of at most four.
+ * @template T
+ * @param {readonly T[]} items
+ * @returns {T[][]}
+ */
+export function batches(items, size = MAX_QUESTIONS) {
+  const out = []
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
   return out
 }
 
 /** Reads one answer from the dialog's `answers` map (question text -> answer). */
-export function answerFor(answers: unknown, question: string): string {
+export function answerFor(answers, question) {
   if (!answers || typeof answers !== 'object') return ''
-  const value = (answers as Record<string, unknown>)[question]
+  const value = answers[question]
   if (Array.isArray(value)) return value.map(str).filter(Boolean).join(', ')
   return str(value)
 }
 
-/** Q/A blocks for every answered question; unanswered ones are left out. */
-export function compileAnswers(questions: readonly AskQuestion[], answers: readonly string[]): string {
+/**
+ * Q/A blocks for every answered question; unanswered ones are left out.
+ * @param {readonly AskQuestion[]} questions
+ * @param {readonly string[]} answers
+ */
+export function compileAnswers(questions, answers) {
   return questions
     .map((q, i) => ({ q, a: (answers[i] ?? '').trim() }))
     .filter(({ a }) => a.length > 0)
